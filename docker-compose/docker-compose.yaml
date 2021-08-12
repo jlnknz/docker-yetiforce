@@ -1,0 +1,105 @@
+# Docker-compose deployment of YetiForce on ${APP_NETWORK} network.
+#
+# Warning: this deployment only allows connecting to http://127.0.0.1/.
+# We need to divise a strategy to implement HTTPS before relaxing this constraint
+# (e.g., use an edge router like Traefik or add SSL certificates configuration in
+# our Nginx image).
+#
+# FIXME: When images are pushed to a registry, use reference to the registry image
+# FIXME: instead of `build: ../path/to/image/`
+
+services:
+
+  yeti-init-prod:
+    build: ../images/yeti-init-prod
+    network_mode: none
+    read_only: true
+    restart: on-failure
+    volumes:
+      - app:/app
+    tmpfs:
+      - /tmp
+
+  yeti-nginx:
+    build: ../images/yeti-nginx
+    read_only: true
+    restart: always
+    depends_on:
+      - yeti-init-prod
+      - yeti-php-fpm
+    networks:
+      yeti-network:
+        aliases:
+          - yeti-nginx
+    volumes:
+      - app:/var/www/html:ro
+    tmpfs:
+      - /tmp
+    ports:
+      - "127.0.0.1:80:8080"
+
+  yeti-php-fpm:
+    build: ../images/yeti-php-fpm
+    read_only: true
+    restart: always
+    depends_on:
+      - yeti-mysql
+      - yeti-init-prod
+    networks:
+      yeti-network:
+        aliases:
+          - yeti-php-fpm
+    tmpfs:
+      - /tmp
+    volumes:
+      - app:/var/www/html
+
+  yeti-cron:
+    build: ../images/yeti-php-fpm
+    read_only: true
+    restart: always
+    depends_on:
+      - yeti-mysql
+      - yeti-init-prod
+    networks:
+      yeti-network:
+    tmpfs:
+      - /tmp
+    volumes:
+      - app:/var/www/html
+    command: [ "/yeti-cron.sh" ]
+
+  yeti-mysql:
+    build: ../images/yeti-mysql
+    read_only: true
+    restart: always
+    networks:
+      yeti-network:
+        aliases:
+          - yeti-mysql
+    tmpfs:
+      - /tmp
+      - /run/mysqld
+    volumes:
+      - db:/var/lib/mysql
+    environment:
+      # MySQL root password
+      MYSQL_ROOT_PASSWORD: ${APP_DATABASE_ROOT_PASSWORD}
+      # The yeti user password, the rest is already set in the image
+      MYSQL_PASSWORD: ${APP_DATABASE_YETI_USER_PASSWORD}
+    cap_add:
+      # Avoid issues with mysql not able to call mbind()
+      # https://github.com/docker-library/mysql/issues/422
+      - SYS_NICE
+
+networks:
+  yeti-network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: ${APP_NETWORK}
+
+volumes:
+  app:
+  db:
